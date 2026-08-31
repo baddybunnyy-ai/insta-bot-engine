@@ -28,7 +28,6 @@ def get_credits(user_id):
     c.execute("SELECT credits FROM user_credits WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     if row is None:
-        # First-time user gets 2 FREE Downloads bonus
         c.execute("INSERT INTO user_credits VALUES (?, ?)", (user_id, 2))
         conn.commit()
         credits = 2
@@ -73,7 +72,6 @@ def send_welcome(message):
     user_id = message.from_user.id
     text = message.text.strip()
     
-    # Handle Reward Deep-Link from Ad Completion
     if "reward_" in text:
         add_credits(user_id, 3)
         total_credits = get_credits(user_id)
@@ -106,14 +104,26 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
     file_prefix = f"dl_{user_id}_{int(time.time())}"
     
     ydl_opts = {
-        # Universal format selector (Picks pre-merged single video+audio stream to avoid FFmpeg crash)
-        'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+        # Strict single-stream selection to avoid FFmpeg requirement on Render
+        'format': 'best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best[ext=mp4]/best',
         'outtmpl': f'{file_prefix}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'max_filesize': 25 * 1024 * 1024,  # 25 MB Safe Limit
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'nocheckcertificate': True,
+        'max_filesize': 25 * 1024 * 1024,  # 25 MB Limit
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate'
+        },
+        # YouTube Datacenter IP bypass client emulation
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web_creator']
+            }
+        }
     }
     
     downloaded_files = []
@@ -121,7 +131,7 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Find the downloaded file regardless of extension (.mp4, .mkv, .webm)
+        # Search for the output file with any extension
         downloaded_files = glob.glob(f"{file_prefix}.*")
         
         if downloaded_files:
@@ -136,16 +146,19 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
                 os.remove(f)
             bot.delete_message(chat_id, msg.message_id)
         else:
-            raise Exception("File not found after download.")
+            raise Exception("File not found on disk after download.")
             
     except Exception as e:
-        # Refund credit if download fails
-        add_credits(user_id, 1)
+        add_credits(user_id, 1)  # Refund credit if failed
         for f in glob.glob(f"{file_prefix}.*"):
             try:
                 os.remove(f)
             except:
                 pass
+        try:
+            bot.delete_message(chat_id, msg.message_id)
+        except:
+            pass
         bot.send_message(
             chat_id, 
             "❌ **Download Failed.** (Credit Refunded)\n\nPlease make sure:\n1. The link is from a public post/account.\n2. The video is under 25MB."
@@ -157,7 +170,6 @@ def handle_message(message):
     user_id = message.from_user.id
     text = message.text.strip()
 
-    # Check if input is a valid URL
     if not text.startswith("http://") and not text.startswith("https://"):
         bot.reply_to(message, "⚠️ Please send a valid **video URL / link**.")
         return
@@ -165,12 +177,10 @@ def handle_message(message):
     credits = get_credits(user_id)
 
     if credits > 0:
-        # Deduct 1 credit & start download
         deduct_credit(user_id)
         remaining = credits - 1
         download_and_send(message.chat.id, user_id, text, remaining)
     else:
-        # Out of Credits -> Show Monetag Ad Button
         cache_bypass_url = f"{WEB_APP_URL}/?uid={user_id}&v={int(time.time())}"
         markup = types.InlineKeyboardMarkup()
         web_app_info = types.WebAppInfo(url=cache_bypass_url)
