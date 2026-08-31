@@ -22,7 +22,7 @@ def init_db():
     conn.close()
 
 def set_vip_pass(user_id):
-    expiry = time.time() + (24 * 3600) # 24 Hours Pass
+    expiry = time.time() + (24 * 3600)  # 24 Hours Pass
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO vip_users VALUES (?, ?)", (user_id, expiry))
@@ -129,9 +129,10 @@ def handle_message(message):
         # VIP Active -> Instant Download
         download_and_send(message.chat.id, user_id, text)
     else:
-        # Pass Expired -> Show Ad Button
+        # Pass Expired -> Show Ad Button (Cache-Buster Enabled)
+        cache_bypass_url = f"{WEB_APP_URL}/?v={int(time.time())}"
         markup = types.InlineKeyboardMarkup()
-        web_app_info = types.WebAppInfo(url=WEB_APP_URL)
+        web_app_info = types.WebAppInfo(url=cache_bypass_url)
         ad_button = types.InlineKeyboardButton(text="▶️ Unlock 24h Free Pass (5s Ad)", web_app=web_app_info)
         markup.add(ad_button)
         
