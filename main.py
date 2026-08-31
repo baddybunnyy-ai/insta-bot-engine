@@ -10,7 +10,7 @@ import yt_dlp
 from flask import Flask
 from threading import Thread
 
-# Static FFmpeg Initialization
+# Static FFmpeg binary initialization
 try:
     import imageio_ffmpeg
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
@@ -22,7 +22,7 @@ WEB_APP_URL = "https://insta-reel-ad.vercel.app"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# SQLite Database Setup (Credits System)
+# --- SQLite Database (Credits System) ---
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
@@ -37,6 +37,7 @@ def get_credits(user_id):
     c.execute("SELECT credits FROM user_credits WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     if row is None:
+        # First-time user gets 2 Free Downloads
         c.execute("INSERT INTO user_credits VALUES (?, ?)", (user_id, 2))
         conn.commit()
         credits = 2
@@ -62,7 +63,7 @@ def add_credits(user_id, amount=3):
 
 init_db()
 
-# Keep-alive Web Server for Render Hosting
+# --- 24/7 Keep-Alive Web Server for Render ---
 app = Flask('')
 @app.route('/')
 def home():
@@ -75,12 +76,13 @@ def keep_alive():
     t = Thread(target=run_flask)
     t.start()
 
-# /start command & Monetag Deep-link Reward Listener
+# --- Telegram Command Handlers ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
     text = message.text.strip()
     
+    # Handle reward deep-link from Monetag Ad completion
     if "reward_" in text:
         add_credits(user_id, 3)
         total_credits = get_credits(user_id)
@@ -107,63 +109,69 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
-# YouTube Anti-Block Stream Extractor
-def fetch_youtube_video(url, output_path):
+# --- Helper: URL Normalizer ---
+def normalize_url(url):
     yt_match = re.search(r'(?:shorts/|v=|youtu\.be/|embed/)([a-zA-Z0-9_-]{11})', url)
-    if not yt_match:
-        return False
-    video_id = yt_match.group(1)
+    if yt_match and ('youtube.com' in url or 'youtu.be' in url):
+        return f"https://www.youtube.com/watch?v={yt_match.group(1)}", yt_match.group(1)
+    return url, None
 
+# --- Tier 1: YouTube Dedicated Proxy Gateways ---
+def fetch_youtube_via_proxy(video_id, target_url, output_path):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Content-Type": "application/json"
     }
 
-    # 1. Try Piped APIs
-    piped_instances = [
-        "https://pipedapi.kavin.rocks",
-        "https://api.piped.privacy.com.de",
-        "https://piped-api.garudalinux.org",
-        "https://api.piped.projectsegfau.lt"
+    # 1. Cobalt Instances (Handles both v7 and v10 JSON structures)
+    cobalt_instances = [
+        "https://cobalt-api.kwiatekm.tokyo",
+        "https://capi.wuk.sh",
+        "https://cobalt.xy2401.com",
+        "https://cobalt-backend.canine.tools",
+        "https://api.cobalt.tools"
     ]
-    for instance in piped_instances:
+    for node in cobalt_instances:
         try:
-            res = requests.get(f"{instance}/streams/{video_id}", headers=headers, timeout=5)
+            req_url = node if node.endswith('/') else node + '/'
+            res = requests.post(req_url, json={"url": target_url}, headers=headers, timeout=6)
             if res.status_code == 200:
                 data = res.json()
-                streams = [s for s in data.get("videoStreams", []) if not s.get("videoOnly", True)]
-                if not streams:
-                    streams = data.get("videoStreams", [])
-                if streams:
-                    stream_url = streams[0].get("url")
-                    if stream_url:
-                        with requests.get(stream_url, headers=headers, stream=True, timeout=25) as r:
-                            r.raise_for_status()
-                            with open(output_path, 'wb') as f:
-                                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                                    if chunk:
-                                        f.write(chunk)
-                        if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
-                            return True
+                stream_url = data.get("url")
+                if not stream_url and "picker" in data and len(data["picker"]) > 0:
+                    stream_url = data["picker"][0].get("url")
+                
+                if stream_url:
+                    with requests.get(stream_url, headers={"User-Agent": headers["User-Agent"]}, stream=True, timeout=30) as r:
+                        r.raise_for_status()
+                        with open(output_path, 'wb') as f:
+                            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                                if chunk:
+                                    f.write(chunk)
+                    if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                        return True
         except Exception:
             continue
 
-    # 2. Try Invidious APIs
-    invidious_instances = [
+    # 2. Invidious API Fallback
+    invidious_nodes = [
         "https://invidious.nerdvpn.de",
         "https://inv.nadeko.net",
         "https://invidious.no-valis.org",
         "https://inv.in.projectsegfau.lt"
     ]
-    for instance in invidious_instances:
+    for node in invidious_nodes:
         try:
-            res = requests.get(f"{instance}/api/v1/videos/{video_id}", headers=headers, timeout=5)
+            api_url = f"{node}/api/v1/videos/{video_id}"
+            res = requests.get(api_url, headers={"User-Agent": headers["User-Agent"]}, timeout=6)
             if res.status_code == 200:
                 data = res.json()
                 format_streams = data.get("formatStreams", [])
                 if format_streams:
                     stream_url = format_streams[-1].get("url")
                     if stream_url:
-                        with requests.get(stream_url, headers=headers, stream=True, timeout=25) as r:
+                        with requests.get(stream_url, headers={"User-Agent": headers["User-Agent"]}, stream=True, timeout=30) as r:
                             r.raise_for_status()
                             with open(output_path, 'wb') as f:
                                 for chunk in r.iter_content(chunk_size=1024 * 1024):
@@ -176,27 +184,37 @@ def fetch_youtube_video(url, output_path):
 
     return False
 
-# Universal Downloader Handler
-def download_and_send(chat_id, user_id, url, remaining_credits):
+# --- Master Downloader Engine ---
+def download_and_send(chat_id, user_id, raw_url, remaining_credits):
     msg = bot.send_message(chat_id, "⚡ *Processing & downloading HD video, please wait...*", parse_mode="Markdown")
     file_prefix = f"dl_{user_id}_{int(time.time())}"
     final_file = f"{file_prefix}.mp4"
+    clean_url, video_id = normalize_url(raw_url)
     success = False
 
-    # Route 1: YouTube / YouTube Shorts
-    if "youtube.com" in url or "youtu.be" in url:
-        success = fetch_youtube_video(url, final_file)
+    # Step 1: If YouTube, try Proxy Pipeline first
+    if video_id:
+        success = fetch_youtube_via_proxy(video_id, clean_url, final_file)
 
-    # Route 2: Instagram, Pinterest, Twitter/X, Reddit, Facebook (via yt-dlp)
+    # Step 2: Fallback to yt-dlp (For Instagram, Pinterest, Twitter, AND YouTube fallback)
     if not success:
         ydl_opts = {
-            'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best',
             'outtmpl': f'{file_prefix}.%(ext)s',
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
             'nocheckcertificate': True,
-            'max_filesize': 25 * 1024 * 1024,
+            'max_filesize': 25 * 1024 * 1024,  # 25 MB Limit
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios', 'tv_embedded', 'mweb'],
+                    'player_skip': ['webpage', 'configs']
+                },
+                'twitter': {
+                    'api': 'syndication'
+                }
+            }
         }
         if FFMPEG_PATH:
             ydl_opts['ffmpeg_location'] = FFMPEG_PATH
@@ -204,7 +222,7 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+                ydl.download([clean_url])
             
             downloaded = glob.glob(f"{file_prefix}*")
             valid = [f for f in downloaded if not f.endswith('.part') and not f.endswith('.ytdl')]
@@ -212,9 +230,9 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
                 final_file = valid[0]
                 success = True
         except Exception as e:
-            print(f"Downloader engine error: {e}")
+            print(f"yt-dlp extraction error: {e}")
 
-    # Dispatch Video to User
+    # Step 3: Dispatch or Refund
     if success and os.path.exists(final_file) and os.path.getsize(final_file) > 0:
         try:
             with open(final_file, 'rb') as video:
@@ -227,14 +245,14 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
         except Exception as e:
             print(f"Telegram upload error: {e}")
         
-        # Cleanup temp file
+        # Cleanup
         for f in glob.glob(f"{file_prefix}*"):
             try:
                 os.remove(f)
             except Exception:
                 pass
     else:
-        # Refund credit on failure
+        # Refund Credit
         add_credits(user_id, 1)
         for f in glob.glob(f"{file_prefix}*"):
             try:
@@ -250,7 +268,7 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
             "❌ **Download Failed.** (Credit Refunded)\n\nPlease make sure:\n1. The link is from a public post/account.\n2. The video is under 25MB."
         )
 
-# Handle incoming links
+# --- Incoming Message Dispatcher ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     user_id = message.from_user.id
