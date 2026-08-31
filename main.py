@@ -22,7 +22,7 @@ def init_db():
     conn.close()
 
 def set_vip_pass(user_id):
-    expiry = time.time() + (24 * 3600) # 24 Hours
+    expiry = time.time() + (24 * 3600) # 24 Hours Pass
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO vip_users VALUES (?, ?)", (user_id, expiry))
@@ -59,7 +59,7 @@ def keep_alive():
 def send_welcome(message):
     bot.reply_to(
         message, 
-        "👋 **Namaste!**\n\nMujhe koi bhi **Instagram Reel / Video ka link** bhejo, main turant 1080p high speed me download kar dunga!",
+        "👋 **Welcome to Instagram Reels Downloader!**\n\nSend me any public **Instagram Reel, Video, or Post link**, and I will download it for you in high quality instantly!",
         parse_mode="Markdown"
     )
 
@@ -70,13 +70,13 @@ def handle_web_app_data(message):
     set_vip_pass(user_id)
     bot.send_message(
         message.chat.id, 
-        "🎉 **24 Hours Free VIP Pass Unlocked!**\n\nAb aap agle 24 ghante tak bina kisi ad ke unlimited reels download kar sakte hain. Link bhejo!",
+        "🎉 **24-Hour VIP Pass Unlocked!**\n\nYou now have unlimited, ad-free downloads for the next 24 hours. Send your link to download!",
         parse_mode="Markdown"
     )
 
 # Download and Send Reel
 def download_and_send(chat_id, user_id, url):
-    msg = bot.send_message(chat_id, "⚡ *Video download ho rahi hai, bas 5 second...*", parse_mode="Markdown")
+    msg = bot.send_message(chat_id, "⚡ *Downloading your video, please wait...*", parse_mode="Markdown")
     file_path = f'video_{user_id}_{int(time.time())}.mp4'
     ydl_opts = {
         'format': 'best',
@@ -96,7 +96,7 @@ def download_and_send(chat_id, user_id, url):
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
-        bot.send_message(chat_id, "❌ Video download nahi ho saki. Kripya check karein link public video ka ho.")
+        bot.send_message(chat_id, "❌ Unable to download the video. Please make sure the link is from a public account.")
 
 # Handle incoming links
 @bot.message_handler(func=lambda message: True)
@@ -105,7 +105,7 @@ def handle_message(message):
     text = message.text.strip()
 
     if "instagram.com" not in text:
-        bot.reply_to(message, "⚠️ Kripya valid **Instagram link** bhejein.")
+        bot.reply_to(message, "⚠️ Please send a valid **Instagram link**.")
         return
 
     if is_vip_active(user_id):
@@ -115,12 +115,12 @@ def handle_message(message):
         # Pass Expired -> Show Ad Button
         markup = types.InlineKeyboardMarkup()
         web_app_info = types.WebAppInfo(url=WEB_APP_URL)
-        ad_button = types.InlineKeyboardButton(text="▶️ Unlock 24h Free Download (5s Ad)", web_app=web_app_info)
+        ad_button = types.InlineKeyboardButton(text="▶️ Unlock 24h Free Pass (5s Ad)", web_app=web_app_info)
         markup.add(ad_button)
         
         bot.send_message(
             message.chat.id,
-            "⚡ **Download Karne Ke Liye 24-Hour Pass Unlock Karein:**\n\nNeeche button par click karke 5-second ka ad dekhein aur **24 ghante ke liye VIP download free** karein!",
+            "⚡ **Unlock 24-Hour Free Pass:**\n\nTap the button below to watch a quick 5-second ad and enjoy **unlimited free downloads for 24 hours**!",
             reply_markup=markup,
             parse_mode="Markdown"
         )
