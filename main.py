@@ -12,32 +12,44 @@ WEB_APP_URL = "https://insta-reel-ad.vercel.app"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# SQLite Database Setup (Persistent VIP Pass)
+# SQLite Database Setup (Credits System)
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS vip_users 
-                 (user_id INTEGER PRIMARY KEY, expiry_time REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS user_credits 
+                 (user_id INTEGER PRIMARY KEY, credits INTEGER)''')
     conn.commit()
     conn.close()
 
-def set_vip_pass(user_id):
-    expiry = time.time() + (24 * 3600)  # 24 Hours VIP Pass
+def get_credits(user_id):
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO vip_users VALUES (?, ?)", (user_id, expiry))
-    conn.commit()
-    conn.close()
-
-def is_vip_active(user_id):
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute("SELECT expiry_time FROM vip_users WHERE user_id = ?", (user_id,))
+    c.execute("SELECT credits FROM user_credits WHERE user_id = ?", (user_id,))
     row = c.fetchone()
+    if row is None:
+        # First-time user gets 2 FREE Downloads bonus
+        c.execute("INSERT INTO user_credits VALUES (?, ?)", (user_id, 2))
+        conn.commit()
+        credits = 2
+    else:
+        credits = row[0]
     conn.close()
-    if row and time.time() < row[0]:
-        return True
-    return False
+    return credits
+
+def deduct_credit(user_id):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("UPDATE user_credits SET credits = credits - 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def add_credits(user_id, amount=3):
+    current = get_credits(user_id)
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("UPDATE user_credits SET credits = ? WHERE user_id = ?", (current + amount, user_id))
+    conn.commit()
+    conn.close()
 
 init_db()
 
@@ -57,6 +69,8 @@ def keep_alive():
 # /start command
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    user_id = message.from_user.id
+    credits = get_credits(user_id)
     welcome_text = (
         "🚀 **All-in-One Video Downloader Bot**\n\n"
         "Send me any link from supported platforms:\n"
@@ -65,23 +79,27 @@ def send_welcome(message):
         "• **Twitter / X** (Videos & GIFs)\n"
         "• **Pinterest** (Videos & Media)\n"
         "• **Facebook & Reddit**\n\n"
-        "I'll download it in HD quality instantly!"
+        f"🎁 **Your Available Balance:** `{credits} Free Downloads`\n\n"
+        "Just paste your link to start downloading!"
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
-# Listen for Monetag WebApp Ad Completion Signal
+# Listen for Monetag WebApp Ad Completion Signal (+3 Credits)
 @bot.message_handler(content_types=['web_app_data'])
 def handle_web_app_data(message):
     user_id = message.from_user.id
-    set_vip_pass(user_id)
+    add_credits(user_id, 3)
+    total_credits = get_credits(user_id)
     bot.send_message(
         message.chat.id, 
-        "🎉 **24-Hour VIP Pass Unlocked!**\n\nYou now have unlimited, direct downloads across all platforms for the next 24 hours. Send your link to download!",
+        f"🎉 **+3 Download Credits Added!**\n\n"
+        f"⚡ Total Available Credits: **{total_credits} Downloads**\n\n"
+        f"Send your video link now to download!",
         parse_mode="Markdown"
     )
 
 # Download and Send Media Handler
-def download_and_send(chat_id, user_id, url):
+def download_and_send(chat_id, user_id, url, remaining_credits):
     msg = bot.send_message(chat_id, "⚡ *Downloading your video in HD, please wait...*", parse_mode="Markdown")
     file_path = f'video_{user_id}_{int(time.time())}.mp4'
     
@@ -102,16 +120,18 @@ def download_and_send(chat_id, user_id, url):
                 bot.send_video(
                     chat_id, 
                     video, 
-                    caption="📥 **Downloaded via All-in-One Saver Bot**"
+                    caption=f"📥 **Downloaded via All-in-One Saver Bot**\n⚡ *Credits remaining:* `{remaining_credits}`"
                 )
             os.remove(file_path)
         bot.delete_message(chat_id, msg.message_id)
     except Exception as e:
+        # Refund credit if download fails
+        add_credits(user_id, 1)
         if os.path.exists(file_path):
             os.remove(file_path)
         bot.send_message(
             chat_id, 
-            "❌ **Download Failed.**\n\nPlease make sure:\n1. The link is from a public post/account.\n2. The video is under Telegram's 50MB size limit."
+            "❌ **Download Failed.** (Credit Refunded)\n\nPlease make sure:\n1. The link is from a public post.\n2. The video is under Telegram's 50MB size limit."
         )
 
 # Handle incoming links
@@ -125,21 +145,26 @@ def handle_message(message):
         bot.reply_to(message, "⚠️ Please send a valid **video URL / link**.")
         return
 
-    if is_vip_active(user_id):
-        # VIP Active -> Instant Download
-        download_and_send(message.chat.id, user_id, text)
+    credits = get_credits(user_id)
+
+    if credits > 0:
+        # Deduct 1 credit & send download
+        deduct_credit(user_id)
+        remaining = credits - 1
+        download_and_send(message.chat.id, user_id, text, remaining)
     else:
-        # Pass Expired -> Show Monetag Ad Button
+        # Out of Credits -> Show Monetag Ad Button
         cache_bypass_url = f"{WEB_APP_URL}/?v={int(time.time())}"
         markup = types.InlineKeyboardMarkup()
         web_app_info = types.WebAppInfo(url=cache_bypass_url)
-        ad_button = types.InlineKeyboardButton(text="⚡ Unlock 24h Free VIP Pass", web_app=web_app_info)
+        ad_button = types.InlineKeyboardButton(text="⚡ Watch Ad (+3 Downloads)", web_app=web_app_info)
         markup.add(ad_button)
         
         bot.send_message(
             message.chat.id,
-            "🔒 **VIP Pass Required**\n\n"
-            "Tap below to watch a quick ad and enjoy **24 Hours of Unlimited HD Downloads** across all platforms!",
+            "🔒 **Out of Download Credits!**\n\n"
+            "You have used all your free downloads.\n\n"
+            "Tap below to watch a quick 5-second ad and get **+3 HD Downloads** instantly!",
             reply_markup=markup,
             parse_mode="Markdown"
         )
