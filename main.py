@@ -66,10 +66,25 @@ def keep_alive():
     t = Thread(target=run_flask)
     t.start()
 
-# /start command
+# /start command & Ad Reward Listener
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
+    text = message.text.strip()
+    
+    # Handle Reward Deep-Link from Ad Completion
+    if "reward_" in text:
+        add_credits(user_id, 3)
+        total_credits = get_credits(user_id)
+        bot.reply_to(
+            message,
+            f"🎉 **+3 Download Credits Added!**\n\n"
+            f"⚡ Total Available Credits: **{total_credits} Downloads**\n\n"
+            f"📥 **Send your video link now to download!**",
+            parse_mode="Markdown"
+        )
+        return
+
     credits = get_credits(user_id)
     welcome_text = (
         "🚀 **All-in-One Video Downloader Bot**\n\n"
@@ -83,20 +98,6 @@ def send_welcome(message):
         "Just paste your link to start downloading!"
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
-
-# Listen for Monetag WebApp Ad Completion Signal (+3 Credits)
-@bot.message_handler(content_types=['web_app_data'])
-def handle_web_app_data(message):
-    user_id = message.from_user.id
-    add_credits(user_id, 3)
-    total_credits = get_credits(user_id)
-    bot.send_message(
-        message.chat.id, 
-        f"🎉 **+3 Download Credits Added!**\n\n"
-        f"⚡ Total Available Credits: **{total_credits} Downloads**\n\n"
-        f"Send your video link now to download!",
-        parse_mode="Markdown"
-    )
 
 # Download and Send Media Handler
 def download_and_send(chat_id, user_id, url, remaining_credits):
@@ -153,8 +154,8 @@ def handle_message(message):
         remaining = credits - 1
         download_and_send(message.chat.id, user_id, text, remaining)
     else:
-        # Out of Credits -> Show Monetag Ad Button
-        cache_bypass_url = f"{WEB_APP_URL}/?v={int(time.time())}"
+        # Out of Credits -> Show Monetag Ad Button with User ID
+        cache_bypass_url = f"{WEB_APP_URL}/?uid={user_id}&v={int(time.time())}"
         markup = types.InlineKeyboardMarkup()
         web_app_info = types.WebAppInfo(url=cache_bypass_url)
         ad_button = types.InlineKeyboardButton(text="⚡ Watch Ad (+3 Downloads)", web_app=web_app_info)
@@ -164,7 +165,7 @@ def handle_message(message):
             message.chat.id,
             "🔒 **Out of Download Credits!**\n\n"
             "You have used all your free downloads.\n\n"
-            "Tap below to watch a quick 5-second ad and get **+3 HD Downloads** instantly!",
+            "Tap below to watch a quick ad and get **+3 HD Downloads** instantly!",
             reply_markup=markup,
             parse_mode="Markdown"
         )
