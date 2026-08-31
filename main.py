@@ -111,7 +111,6 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
     file_prefix = f"dl_{user_id}_{int(time.time())}"
     
     ydl_opts = {
-        # Universal Smart Format: Single MP4 first -> Merge if needed -> best available
         'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
         'outtmpl': f'{file_prefix}.%(ext)s',
         'quiet': True,
@@ -119,6 +118,12 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
         'noplaylist': True,
         'nocheckcertificate': True,
         'max_filesize': 25 * 1024 * 1024,
+        # Dedicated YouTube datacenter bot bypass
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios']
+            }
+        }
     }
     
     if FFMPEG_PATH:
@@ -130,7 +135,7 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Look for any created media file
+        # Search for the output video file
         downloaded_files = glob.glob(f"{file_prefix}*")
         valid_files = [f for f in downloaded_files if not f.endswith('.part') and not f.endswith('.ytdl')]
         
