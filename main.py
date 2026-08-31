@@ -57,11 +57,17 @@ def keep_alive():
 # /start command
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(
-        message, 
-        "👋 **Welcome to Instagram Reels Downloader!**\n\nSend me any public **Instagram Reel, Video, or Post link**, and I will download it for you in high quality instantly!",
-        parse_mode="Markdown"
+    welcome_text = (
+        "🚀 **All-in-One Video Downloader Bot**\n\n"
+        "Send me any link from supported platforms:\n"
+        "• **Instagram** (Reels, Posts, Videos)\n"
+        "• **YouTube** (Shorts & Videos)\n"
+        "• **Twitter / X** (Videos & GIFs)\n"
+        "• **Pinterest** (Videos & Media)\n"
+        "• **Facebook & Reddit**\n\n"
+        "I'll download it in HD quality instantly!"
     )
+    bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
 # Listen for WebApp Ad Completion Signal
 @bot.message_handler(content_types=['web_app_data'])
@@ -70,33 +76,43 @@ def handle_web_app_data(message):
     set_vip_pass(user_id)
     bot.send_message(
         message.chat.id, 
-        "🎉 **24-Hour VIP Pass Unlocked!**\n\nYou now have unlimited, ad-free downloads for the next 24 hours. Send your link to download!",
+        "🎉 **24-Hour VIP Pass Unlocked!**\n\nYou now have unlimited, ad-free downloads across all platforms for the next 24 hours. Send your link to download!",
         parse_mode="Markdown"
     )
 
-# Download and Send Reel
+# Download and Send Media
 def download_and_send(chat_id, user_id, url):
-    msg = bot.send_message(chat_id, "⚡ *Downloading your video, please wait...*", parse_mode="Markdown")
+    msg = bot.send_message(chat_id, "⚡ *Downloading your video in HD, please wait...*", parse_mode="Markdown")
     file_path = f'video_{user_id}_{int(time.time())}.mp4'
+    
     ydl_opts = {
-        'format': 'best',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': file_path,
         'quiet': True,
-        'no_warnings': True
+        'no_warnings': True,
+        'max_filesize': 50 * 1024 * 1024  # 50 MB Telegram Bot API limit
     }
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
         if os.path.exists(file_path):
             with open(file_path, 'rb') as video:
-                bot.send_video(chat_id, video, caption="📥 **Downloaded by @InstaReelsSaverX_bot**")
+                bot.send_video(
+                    chat_id, 
+                    video, 
+                    caption="📥 **Downloaded via All-in-One Saver Bot**"
+                )
             os.remove(file_path)
         bot.delete_message(chat_id, msg.message_id)
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
-        bot.send_message(chat_id, "❌ Unable to download the video. Please make sure the link is from a public account.")
+        bot.send_message(
+            chat_id, 
+            "❌ **Download Failed.**\n\nPlease make sure:\n1. The link is from a public post/account.\n2. The video is under Telegram's 50MB size limit."
+        )
 
 # Handle incoming links
 @bot.message_handler(func=lambda message: True)
@@ -104,8 +120,9 @@ def handle_message(message):
     user_id = message.from_user.id
     text = message.text.strip()
 
-    if "instagram.com" not in text:
-        bot.reply_to(message, "⚠️ Please send a valid **Instagram link**.")
+    # Check if input is a URL
+    if not text.startswith("http://") and not text.startswith("https://"):
+        bot.reply_to(message, "⚠️ Please send a valid **video URL / link**.")
         return
 
     if is_vip_active(user_id):
@@ -120,7 +137,7 @@ def handle_message(message):
         
         bot.send_message(
             message.chat.id,
-            "⚡ **Unlock 24-Hour Free Pass:**\n\nTap the button below to watch a quick 5-second ad and enjoy **unlimited free downloads for 24 hours**!",
+            "⚡ **Unlock 24-Hour Free Pass:**\n\nTap the button below to watch a quick 5-second ad and enjoy **unlimited downloads across all platforms for 24 hours**!",
             reply_markup=markup,
             parse_mode="Markdown"
         )
