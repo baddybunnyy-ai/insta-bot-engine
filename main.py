@@ -1,6 +1,7 @@
 import os
 import time
 import sqlite3
+import glob
 import telebot
 from telebot import types
 import yt_dlp
@@ -79,7 +80,7 @@ def send_welcome(message):
         bot.reply_to(
             message,
             f"🎉 **+3 Download Credits Added!**\n\n"
-            f"⚡ Total Available Credits: **{total_credits} Downloads**\n\n"
+            f"⚡ Total Available Balance: **{total_credits} Downloads**\n\n"
             f"📥 **Send your video link now to download!**",
             parse_mode="Markdown"
         )
@@ -94,45 +95,60 @@ def send_welcome(message):
         "• **Twitter / X** (Videos & GIFs)\n"
         "• **Pinterest** (Videos & Media)\n"
         "• **Facebook & Reddit**\n\n"
-        f"🎁 **Your Available Balance:** `{credits} Free Downloads`\n\n"
-        "Just paste your link to start downloading!"
+        f"🎁 **Your Balance:** `{credits} Free Downloads`\n\n"
+        "Paste your link to start downloading!"
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
-# Download and Send Media Handler
+# Universal Multi-Platform Downloader Handler
 def download_and_send(chat_id, user_id, url, remaining_credits):
     msg = bot.send_message(chat_id, "⚡ *Downloading your video in HD, please wait...*", parse_mode="Markdown")
-    file_path = f'video_{user_id}_{int(time.time())}.mp4'
+    file_prefix = f"dl_{user_id}_{int(time.time())}"
     
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': file_path,
+        # Universal format selector (Picks pre-merged single video+audio stream to avoid FFmpeg crash)
+        'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+        'outtmpl': f'{file_prefix}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
-        'max_filesize': 50 * 1024 * 1024  # 50 MB Telegram Bot API limit
+        'noplaylist': True,
+        'max_filesize': 25 * 1024 * 1024,  # 25 MB Safe Limit
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
+    downloaded_files = []
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        if os.path.exists(file_path):
-            with open(file_path, 'rb') as video:
+        # Find the downloaded file regardless of extension (.mp4, .mkv, .webm)
+        downloaded_files = glob.glob(f"{file_prefix}.*")
+        
+        if downloaded_files:
+            file_to_send = downloaded_files[0]
+            with open(file_to_send, 'rb') as video:
                 bot.send_video(
                     chat_id, 
                     video, 
                     caption=f"📥 **Downloaded via All-in-One Saver Bot**\n⚡ *Credits remaining:* `{remaining_credits}`"
                 )
-            os.remove(file_path)
-        bot.delete_message(chat_id, msg.message_id)
+            for f in downloaded_files:
+                os.remove(f)
+            bot.delete_message(chat_id, msg.message_id)
+        else:
+            raise Exception("File not found after download.")
+            
     except Exception as e:
         # Refund credit if download fails
         add_credits(user_id, 1)
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        for f in glob.glob(f"{file_prefix}.*"):
+            try:
+                os.remove(f)
+            except:
+                pass
         bot.send_message(
             chat_id, 
-            "❌ **Download Failed.** (Credit Refunded)\n\nPlease make sure:\n1. The link is from a public post.\n2. The video is under Telegram's 50MB size limit."
+            "❌ **Download Failed.** (Credit Refunded)\n\nPlease make sure:\n1. The link is from a public post/account.\n2. The video is under 25MB."
         )
 
 # Handle incoming links
@@ -149,12 +165,12 @@ def handle_message(message):
     credits = get_credits(user_id)
 
     if credits > 0:
-        # Deduct 1 credit & send download
+        # Deduct 1 credit & start download
         deduct_credit(user_id)
         remaining = credits - 1
         download_and_send(message.chat.id, user_id, text, remaining)
     else:
-        # Out of Credits -> Show Monetag Ad Button with User ID
+        # Out of Credits -> Show Monetag Ad Button
         cache_bypass_url = f"{WEB_APP_URL}/?uid={user_id}&v={int(time.time())}"
         markup = types.InlineKeyboardMarkup()
         web_app_info = types.WebAppInfo(url=cache_bypass_url)
