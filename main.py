@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import sqlite3
 import glob
@@ -64,7 +65,7 @@ init_db()
 app = Flask('')
 @app.route('/')
 def home():
-    return "Bot is running 24/7!"
+    return "Bot Engine 24/7 Active!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -95,7 +96,7 @@ def send_welcome(message):
     welcome_text = (
         "🚀 **All-in-One Video Downloader Bot**\n\n"
         "Send me any link from supported platforms:\n"
-        "• **Instagram** (Reels, Posts, Videos)\n"
+        "• **Instagram** (Reels, Posts, Stories)\n"
         "• **YouTube** (Shorts & Videos)\n"
         "• **Pinterest** (Videos & Media)\n"
         "• **Twitter / X** (Videos & GIFs)\n"
@@ -105,78 +106,96 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
-# Universal Multi-Platform Downloader Handler
-def download_and_send(chat_id, user_id, url, remaining_credits):
-    msg = bot.send_message(chat_id, "⚡ *Downloading your video in HD, please wait...*", parse_mode="Markdown")
+# URL Cleaner & YouTube Shorts Bypass
+def clean_and_bypass_url(url):
+    # Convert YouTube Shorts directly to standard video format
+    yt_match = re.search(r'(?:shorts/|v=|youtu\.be/)([a-zA-Z0-9_-]{11})', url)
+    if yt_match and ('youtube.com' in url or 'youtu.be' in url):
+        video_id = yt_match.group(1)
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
+# Universal Downloader Engine with Multi-Client Auto Fallback
+def download_and_send(chat_id, user_id, raw_url, remaining_credits):
+    target_url = clean_and_bypass_url(raw_url)
+    msg = bot.send_message(chat_id, "⚡ *Processing & downloading HD video, please wait...*", parse_mode="Markdown")
     file_prefix = f"dl_{user_id}_{int(time.time())}"
     
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best',
-        'outtmpl': f'{file_prefix}.%(ext)s',
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-        'nocheckcertificate': True,
-        'max_filesize': 25 * 1024 * 1024,
-        # Strict iOS API emulation to bypass YouTube 'Sign in' bot-block
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios']
-            },
-            'twitter': {
-                'api': 'syndication'
-            }
-        }
-    }
+    # Try different client extractors if YouTube blocks datacenter IP
+    client_strategies = [
+        ['web_safari'],
+        ['mweb', 'web_safari'],
+        ['tv_embedded', 'android_vr'],
+        None  # Default fallback
+    ] if ('youtube.com' in target_url or 'youtu.be' in target_url) else [None]
     
-    if FFMPEG_PATH:
-        ydl_opts['ffmpeg_location'] = FFMPEG_PATH
-        ydl_opts['merge_output_format'] = 'mp4'
+    success = False
 
-    downloaded_files = []
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+    for clients in client_strategies:
+        ydl_opts = {
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best',
+            'outtmpl': f'{file_prefix}.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'nocheckcertificate': True,
+            'max_filesize': 25 * 1024 * 1024,  # 25 MB Limit
+        }
         
-        downloaded_files = glob.glob(f"{file_prefix}*")
-        valid_files = [f for f in downloaded_files if not f.endswith('.part') and not f.endswith('.ytdl')]
-        
-        if valid_files:
-            file_to_send = valid_files[0]
-            with open(file_to_send, 'rb') as video:
-                bot.send_video(
-                    chat_id, 
-                    video, 
-                    caption=f"📥 **Downloaded via All-in-One Saver Bot**\n⚡ *Credits remaining:* `{remaining_credits}`"
-                )
-            for f in downloaded_files:
+        if FFMPEG_PATH:
+            ydl_opts['ffmpeg_location'] = FFMPEG_PATH
+            ydl_opts['merge_output_format'] = 'mp4'
+            
+        if clients:
+            ydl_opts['extractor_args'] = {
+                'youtube': {
+                    'player_client': clients,
+                    'player_skip': ['webpage', 'configs']
+                }
+            }
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([target_url])
+            
+            # Check downloaded file
+            downloaded_files = glob.glob(f"{file_prefix}*")
+            valid_files = [f for f in downloaded_files if not f.endswith('.part') and not f.endswith('.ytdl')]
+            
+            if valid_files:
+                file_to_send = valid_files[0]
+                with open(file_to_send, 'rb') as video:
+                    bot.send_video(
+                        chat_id, 
+                        video, 
+                        caption=f"📥 **Downloaded via All-in-One Saver Bot**\n⚡ *Credits remaining:* `{remaining_credits}`"
+                    )
+                for f in downloaded_files:
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        pass
+                bot.delete_message(chat_id, msg.message_id)
+                success = True
+                break
+        except Exception as e:
+            print(f"Strategy {clients} failed: {e}")
+            for f in glob.glob(f"{file_prefix}*"):
                 try:
                     os.remove(f)
                 except Exception:
                     pass
-            bot.delete_message(chat_id, msg.message_id)
-        else:
-            raise Exception("File not found on disk after download.")
-            
-    except Exception as e:
-        print(f"Download Error for URL {url}: {e}")
-        add_credits(user_id, 1)  # Refund credit on failure
-        for f in glob.glob(f"{file_prefix}*"):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
+            continue
+
+    if not success:
+        add_credits(user_id, 1)  # Refund credit if all strategies fail
         try:
             bot.delete_message(chat_id, msg.message_id)
         except Exception:
             pass
         bot.send_message(
             chat_id, 
-            "❌ **Download Failed.** (Credit Refunded)\n\n"
-            "Possible reasons:\n"
-            "1. Private account or restricted link.\n"
-            "2. Video file size exceeds 25MB.\n"
-            "3. Platform temporarily blocked stream."
+            "❌ **Download Failed.** (Credit Refunded)\n\nPlease make sure:\n1. The link is from a public post/account.\n2. The video is under 25MB."
         )
 
 # Handle incoming links
