@@ -19,14 +19,14 @@ try:
 except Exception:
     FFMPEG_PATH = None
 
-# Configurations
+# Configurations (Direct fallback for immediate copy-paste)
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8991187008:AAEmpfwuA3JUKLAuWYFjkgsnyHhbEcZFY4E")
 WEB_APP_URL = "https://insta-reel-ad.vercel.app"
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB Limit
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 
-# --- SQLite Database (Atomic Support & Replay Protection) ---
+# --- SQLite Database ---
 def init_db():
     with sqlite3.connect('users.db', timeout=15) as conn:
         c = conn.cursor()
@@ -66,9 +66,6 @@ def atomic_add_credits(user_id, amount=3):
         conn.commit()
 
 def verify_and_claim_reward_atomic(payload_token, current_user_id):
-    """
-    Directly claims reward tokens sent by the Web App while preventing duplicate reuse.
-    """
     clean_token = payload_token.strip()
     if not clean_token:
         return False, "Empty token provided."
@@ -76,33 +73,34 @@ def verify_and_claim_reward_atomic(payload_token, current_user_id):
     with sqlite3.connect('users.db', timeout=15) as conn:
         c = conn.cursor()
         try:
-            # Enforce single-use per token
             c.execute("INSERT INTO used_rewards VALUES (?, ?, ?)", (clean_token, current_user_id, int(time.time())))
-            # Atomically credit 3 downloads in the same transaction
             c.execute('''INSERT INTO user_credits (user_id, credits) VALUES (?, ?)
                          ON CONFLICT(user_id) DO UPDATE SET credits = credits + ?''',
                       (current_user_id, 3, 3))
             conn.commit()
             return True, "Success"
         except sqlite3.IntegrityError:
-            return False, "This reward has already been claimed."
+            return False, "This reward token has already been claimed."
         except Exception as e:
             return False, f"Database error: {e}"
 
 init_db()
 
-# --- Keep-Alive Web Server for Render Hosting ---
+# --- Render Keep-Alive Server (Dynamic Port Binding) ---
 app = Flask('')
+
 @app.route('/')
 def home():
     has_cookies = os.path.exists("cookies.txt")
     return f"Bot Engine Active | Cookies Loaded: {has_cookies}"
 
 def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run_flask)
+    t.daemon = True
     t.start()
 
 # --- URL & Stream Processing ---
@@ -137,7 +135,7 @@ def extract_youtube_id(url):
 def stream_to_file(download_url, output_path, headers):
     """Streams data to disk with 25MB cutoff and immediate cleanup"""
     try:
-        with requests.get(download_url, headers=headers, stream=True, timeout=35) as r:
+        with requests.get(download_url, headers=headers, stream=True, timeout=30) as r:
             r.raise_for_status()
             total_size = 0
             with open(output_path, 'wb') as f:
@@ -162,63 +160,37 @@ def stream_to_file(download_url, output_path, headers):
                 pass
         return False
 
-# --- YouTube Multi-API Gateways ---
+# --- YouTube Active Gateways ---
 def fetch_youtube_api(url, output_path):
+    video_id = extract_youtube_id(url)
+    if not video_id:
+        return False
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Content-Type": "application/json"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "application/json"
     }
 
-    # 1. Cobalt Gateway
-    cobalt_nodes = [
-        "https://capi.wuk.sh/api/json",
-        "https://cobalt-api.kwiatekm.tokyo/api/json",
-        "https://cobalt-backend.canine.tools/api/json",
-        "https://api.cobalt.tools/api/json"
+    live_invidious_nodes = [
+        "https://invidious.futo.org",
+        "https://invidious.projectsegfau.lt",
+        "https://invidious.private.coffee"
     ]
-    payload = {"url": url, "videoQuality": "720", "downloadMode": "auto"}
-
-    for node in cobalt_nodes:
+    for node in live_invidious_nodes:
         try:
-            res = requests.post(node, json=payload, headers=headers, timeout=7)
+            api_url = f"{node}/api/v1/videos/{video_id}"
+            res = requests.get(api_url, headers=headers, timeout=5)
             if res.status_code == 200:
-                data = res.json()
-                stream_url = data.get("url")
-                if not stream_url and "picker" in data and len(data["picker"]) > 0:
-                    stream_url = data["picker"][0].get("url")
+                format_streams = res.json().get("formatStreams", [])
+                valid_mp4s = [s for s in format_streams if s.get("container") == "mp4" or "video/mp4" in s.get("type", "")]
+                target_stream = valid_mp4s[-1] if valid_mp4s else (format_streams[-1] if format_streams else None)
                 
-                if stream_url and stream_to_file(stream_url, output_path, {"User-Agent": headers["User-Agent"]}):
-                    print(f"[LOG: YT-Cobalt] Success via node: {node}")
-                    return True
-        except Exception as e:
-            print(f"[LOG: YT-Cobalt Failed] Node: {node} | Reason: {e}")
+                if target_stream and target_stream.get("url"):
+                    if stream_to_file(target_stream["url"], output_path, headers):
+                        print(f"[*] YouTube stream fetched via {node}")
+                        return True
+        except Exception:
             continue
-
-    # 2. Invidious Gateway
-    video_id = extract_youtube_id(url)
-    if video_id:
-        invidious_nodes = [
-            "https://invidious.nerdvpn.de",
-            "https://inv.nadeko.net",
-            "https://invidious.no-valis.org",
-            "https://inv.in.projectsegfau.lt"
-        ]
-        for node in invidious_nodes:
-            try:
-                res = requests.get(f"{node}/api/v1/videos/{video_id}", headers=headers, timeout=6)
-                if res.status_code == 200:
-                    format_streams = res.json().get("formatStreams", [])
-                    valid_mp4s = [s for s in format_streams if s.get("container") == "mp4" or "video/mp4" in s.get("type", "")]
-                    target_stream = valid_mp4s[-1] if valid_mp4s else (format_streams[-1] if format_streams else None)
-                    
-                    if target_stream and target_stream.get("url"):
-                        if stream_to_file(target_stream["url"], output_path, headers):
-                            print(f"[LOG: YT-Invidious] Success via node: {node}")
-                            return True
-            except Exception as e:
-                print(f"[LOG: YT-Invidious Failed] Node: {node} | Reason: {e}")
-                continue
 
     return False
 
@@ -317,7 +289,6 @@ def send_welcome(message):
     user_id = message.from_user.id
     text = message.text.strip()
     
-    # Handle Monetag Ad Reward Link directly
     if "reward_" in text:
         parts = text.split("reward_")
         if len(parts) > 1:
@@ -379,6 +350,10 @@ def handle_message(message):
 
 if __name__ == '__main__':
     keep_alive()
-    bot.remove_webhook()
-    time.sleep(1)
-    bot.infinity_polling(skip_pending=True)
+    try:
+        bot.remove_webhook()
+        time.sleep(2)
+    except Exception:
+        pass
+    print("[*] Bot Polling Active...")
+    bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
