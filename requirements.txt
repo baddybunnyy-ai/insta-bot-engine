@@ -1,3 +1,5 @@
 pyTelegramBotAPI
 yt-dlp
-flask
+Flask
+imageio-ffmpeg
+requests
