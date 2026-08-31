@@ -8,7 +8,7 @@ import yt_dlp
 from flask import Flask
 from threading import Thread
 
-# Get FFmpeg path safely
+# Static FFmpeg Setup
 try:
     import imageio_ffmpeg
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
@@ -35,6 +35,7 @@ def get_credits(user_id):
     c.execute("SELECT credits FROM user_credits WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     if row is None:
+        # First-time user gets 2 Free Downloads
         c.execute("INSERT INTO user_credits VALUES (?, ?)", (user_id, 2))
         conn.commit()
         credits = 2
@@ -60,11 +61,11 @@ def add_credits(user_id, amount=3):
 
 init_db()
 
-# Keep-alive Web Server for Render Hosting
+# Keep-alive Web Server for Render
 app = Flask('')
 @app.route('/')
 def home():
-    return "Bot is running 24/7!"
+    return "Bot Engine 24/7 Active!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -73,7 +74,7 @@ def keep_alive():
     t = Thread(target=run_flask)
     t.start()
 
-# /start command & Ad Reward Listener
+# /start command & Monetag Deep-link Reward Listener
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -95,7 +96,7 @@ def send_welcome(message):
     welcome_text = (
         "🚀 **All-in-One Video Downloader Bot**\n\n"
         "Send me any link from supported platforms:\n"
-        "• **Instagram** (Reels, Posts, Videos)\n"
+        "• **Instagram** (Reels, Posts, Stories)\n"
         "• **YouTube** (Shorts & Videos)\n"
         "• **Pinterest** (Videos & Media)\n"
         "• **Twitter / X** (Videos & GIFs)\n"
@@ -105,23 +106,27 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
-# Universal Downloader Engine
+# Universal Downloader Engine with Multi-Client Bypass
 def download_and_send(chat_id, user_id, url, remaining_credits):
     msg = bot.send_message(chat_id, "⚡ *Processing & downloading HD video, please wait...*", parse_mode="Markdown")
     file_prefix = f"dl_{user_id}_{int(time.time())}"
     
+    # Robust yt-dlp Configuration
     ydl_opts = {
-        'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best',
         'outtmpl': f'{file_prefix}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'nocheckcertificate': True,
-        'max_filesize': 25 * 1024 * 1024,
-        # Dedicated YouTube datacenter bot bypass
+        'max_filesize': 25 * 1024 * 1024,  # 25 MB Limit
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios']
+                'player_client': ['android', 'tv_embedded', 'web_creator', 'ios'],
+                'player_skip': ['webpage', 'configs']
+            },
+            'twitter': {
+                'api': 'syndication'
             }
         }
     }
@@ -154,11 +159,11 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
                     pass
             bot.delete_message(chat_id, msg.message_id)
         else:
-            raise Exception("File not created on disk.")
+            raise Exception("File not found on disk after download.")
             
     except Exception as e:
         print(f"Download Error for URL {url}: {e}")
-        add_credits(user_id, 1)  # Refund credit if failed
+        add_credits(user_id, 1)  # Refund credit if download fails
         for f in glob.glob(f"{file_prefix}*"):
             try:
                 os.remove(f)
@@ -170,7 +175,11 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
             pass
         bot.send_message(
             chat_id, 
-            "❌ **Download Failed.** (Credit Refunded)\n\nPlease make sure:\n1. The link is public.\n2. The video is under 25MB."
+            "❌ **Download Failed.** (Credit Refunded)\n\n"
+            "Possible reasons:\n"
+            "1. Private account or age-restricted video.\n"
+            "2. Video file size exceeds 25MB.\n"
+            "3. Platform blocked server IP."
         )
 
 # Handle incoming links
