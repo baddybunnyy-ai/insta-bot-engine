@@ -5,17 +5,20 @@ import glob
 import telebot
 from telebot import types
 import yt_dlp
-import imageio_ffmpeg
 from flask import Flask
 from threading import Thread
+
+# Get FFmpeg path safely
+try:
+    import imageio_ffmpeg
+    FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    FFMPEG_PATH = None
 
 BOT_TOKEN = "8991187008:AAEmpfwuA3JUKLAuWYFjkgsnyHhbEcZFY4E"
 WEB_APP_URL = "https://insta-reel-ad.vercel.app"
 
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# Get built-in static FFmpeg binary path
-FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 
 # SQLite Database Setup (Credits System)
 def init_db():
@@ -92,7 +95,7 @@ def send_welcome(message):
     welcome_text = (
         "🚀 **All-in-One Video Downloader Bot**\n\n"
         "Send me any link from supported platforms:\n"
-        "• **Instagram** (Reels, Posts, Stories)\n"
+        "• **Instagram** (Reels, Posts, Videos)\n"
         "• **YouTube** (Shorts & Videos)\n"
         "• **Pinterest** (Videos & Media)\n"
         "• **Twitter / X** (Videos & GIFs)\n"
@@ -102,41 +105,32 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
-# Universal Multi-Platform Downloader Handler
+# Universal Downloader Engine
 def download_and_send(chat_id, user_id, url, remaining_credits):
     msg = bot.send_message(chat_id, "⚡ *Processing & downloading HD video, please wait...*", parse_mode="Markdown")
     file_prefix = f"dl_{user_id}_{int(time.time())}"
     
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best',
+        # Universal Smart Format: Single MP4 first -> Merge if needed -> best available
+        'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
         'outtmpl': f'{file_prefix}.%(ext)s',
-        'ffmpeg_location': FFMPEG_PATH,
-        'merge_output_format': 'mp4',
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'nocheckcertificate': True,
-        'max_filesize': 25 * 1024 * 1024,  # 25 MB Safe Limit
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-        },
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'android']
-            },
-            'twitter': {
-                'api': 'syndication'
-            }
-        }
+        'max_filesize': 25 * 1024 * 1024,
     }
     
+    if FFMPEG_PATH:
+        ydl_opts['ffmpeg_location'] = FFMPEG_PATH
+        ydl_opts['merge_output_format'] = 'mp4'
+
+    downloaded_files = []
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Search for the output video file
+        # Look for any created media file
         downloaded_files = glob.glob(f"{file_prefix}*")
         valid_files = [f for f in downloaded_files if not f.endswith('.part') and not f.endswith('.ytdl')]
         
@@ -148,16 +142,17 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
                     video, 
                     caption=f"📥 **Downloaded via All-in-One Saver Bot**\n⚡ *Credits remaining:* `{remaining_credits}`"
                 )
-            for f in valid_files:
+            for f in downloaded_files:
                 try:
                     os.remove(f)
                 except Exception:
                     pass
             bot.delete_message(chat_id, msg.message_id)
         else:
-            raise Exception("File not found on disk after download.")
+            raise Exception("File not created on disk.")
             
     except Exception as e:
+        print(f"Download Error for URL {url}: {e}")
         add_credits(user_id, 1)  # Refund credit if failed
         for f in glob.glob(f"{file_prefix}*"):
             try:
@@ -170,11 +165,7 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
             pass
         bot.send_message(
             chat_id, 
-            "❌ **Download Failed.** (Credit Refunded)\n\n"
-            "Possible reasons:\n"
-            "1. Private account or restricted post.\n"
-            "2. Video file size exceeds 25MB.\n"
-            "3. Platform temporarily blocked datacenter access."
+            "❌ **Download Failed.** (Credit Refunded)\n\nPlease make sure:\n1. The link is public.\n2. The video is under 25MB."
         )
 
 # Handle incoming links
