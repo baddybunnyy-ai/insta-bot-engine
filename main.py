@@ -1,17 +1,45 @@
 import os
 import time
+import sqlite3
 import telebot
 from telebot import types
 import yt_dlp
 from flask import Flask
 from threading import Thread
 
-# Bot Token & WebApp URL
 BOT_TOKEN = "8991187008:AAEmpfwuA3JUKLAuWYFjkgsnyHhbEcZFY4E"
 WEB_APP_URL = "https://insta-reel-ad.vercel.app"
 
 bot = telebot.TeleBot(BOT_TOKEN)
-user_vip_expiry = {} # Stores 24-hour pass timestamps
+
+# SQLite Database Setup (Persistent VIP Pass)
+def init_db():
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS vip_users 
+                 (user_id INTEGER PRIMARY KEY, expiry_time REAL)''')
+    conn.commit()
+    conn.close()
+
+def set_vip_pass(user_id):
+    expiry = time.time() + (24 * 3600) # 24 Hours
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO vip_users VALUES (?, ?)", (user_id, expiry))
+    conn.commit()
+    conn.close()
+
+def is_vip_active(user_id):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("SELECT expiry_time FROM vip_users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row and time.time() < row[0]:
+        return True
+    return False
+
+init_db()
 
 # Keep-alive Web Server
 app = Flask('')
@@ -39,8 +67,7 @@ def send_welcome(message):
 @bot.message_handler(content_types=['web_app_data'])
 def handle_web_app_data(message):
     user_id = message.from_user.id
-    # Give 24 Hours VIP Pass (24 * 3600 seconds)
-    user_vip_expiry[user_id] = time.time() + (24 * 3600)
+    set_vip_pass(user_id)
     bot.send_message(
         message.chat.id, 
         "🎉 **24 Hours Free VIP Pass Unlocked!**\n\nAb aap agle 24 ghante tak bina kisi ad ke unlimited reels download kar sakte hain. Link bhejo!",
@@ -50,9 +77,10 @@ def handle_web_app_data(message):
 # Download and Send Reel
 def download_and_send(chat_id, user_id, url):
     msg = bot.send_message(chat_id, "⚡ *Video download ho rahi hai, bas 5 second...*", parse_mode="Markdown")
+    file_path = f'video_{user_id}_{int(time.time())}.mp4'
     ydl_opts = {
         'format': 'best',
-        'outtmpl': f'video_{user_id}.mp4',
+        'outtmpl': file_path,
         'quiet': True,
         'no_warnings': True
     }
@@ -60,13 +88,14 @@ def download_and_send(chat_id, user_id, url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        file_path = f'video_{user_id}.mp4'
-        with open(file_path, 'rb') as video:
-            bot.send_video(chat_id, video, caption="📥 **Downloaded by @InstaReelsSaverX_bot**")
-        
-        os.remove(file_path)
+        if os.path.exists(file_path):
+            with open(file_path, 'rb') as video:
+                bot.send_video(chat_id, video, caption="📥 **Downloaded by @InstaReelsSaverX_bot**")
+            os.remove(file_path)
         bot.delete_message(chat_id, msg.message_id)
     except Exception as e:
+        if os.path.exists(file_path):
+            os.remove(file_path)
         bot.send_message(chat_id, "❌ Video download nahi ho saki. Kripya check karein link public video ka ho.")
 
 # Handle incoming links
@@ -79,12 +108,8 @@ def handle_message(message):
         bot.reply_to(message, "⚠️ Kripya valid **Instagram link** bhejein.")
         return
 
-    # Check if 24-hour pass is active
-    current_time = time.time()
-    expiry_time = user_vip_expiry.get(user_id, 0)
-
-    if current_time < expiry_time:
-        # VIP Pass Active -> Direct Download (No Ad)
+    if is_vip_active(user_id):
+        # VIP Active -> Instant Download
         download_and_send(message.chat.id, user_id, text)
     else:
         # Pass Expired -> Show Ad Button
