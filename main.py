@@ -2,8 +2,6 @@ import os
 import re
 import time
 import uuid
-import hmac
-import hashlib
 import sqlite3
 import glob
 import requests
@@ -22,15 +20,13 @@ except Exception:
     FFMPEG_PATH = None
 
 # Configurations
-BOT_TOKEN = "8991187008:AAEmpfwuA3JUKLAuWYFjkgsnyHhbEcZFY4E"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8991187008:AAEmpfwuA3JUKLAuWYFjkgsnyHhbEcZFY4E")
 WEB_APP_URL = "https://insta-reel-ad.vercel.app"
-REWARD_SECRET_KEY = "ad_reward_super_secret_key_2026"
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB Limit
-REWARD_EXPIRY_SECONDS = 300  # 5 Minutes Token Window
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- SQLite Database (Single Transaction Support) ---
+# --- SQLite Database (Atomic Support & Replay Protection) ---
 def init_db():
     with sqlite3.connect('users.db', timeout=15) as conn:
         c = conn.cursor()
@@ -71,63 +67,27 @@ def atomic_add_credits(user_id, amount=3):
 
 def verify_and_claim_reward_atomic(payload_token, current_user_id):
     """
-    Validates:
-    1. Exact 3-part HMAC token structure (Strict - No Fallback)
-    2. Telegram user ID ownership
-    3. Expiry and Future-timestamp rejection
-    4. Cryptographic HMAC SHA-256 signature
-    5. Single-transaction atomic replay protection & credit addition
+    Directly claims reward tokens sent by the Web App while preventing duplicate reuse.
     """
-    try:
-        parts = payload_token.split("_")
-        if len(parts) != 3:
-            return False, "Malformed reward token."
+    clean_token = payload_token.strip()
+    if not clean_token:
+        return False, "Empty token provided."
 
-        token_uid = int(parts[0])
-        token_time = int(parts[1])
-        token_sig = parts[2]
-
-        # Verify user ownership
-        if token_uid != current_user_id:
-            return False, "Token does not match your Telegram ID."
-
-        current_time = int(time.time())
-
-        # Reject future timestamps
-        if token_time > current_time:
-            return False, "Invalid token timestamp."
-
-        # Reject expired tokens (> 5 mins)
-        if current_time - token_time > REWARD_EXPIRY_SECONDS:
-            return False, "Reward token expired."
-
-        # Verify HMAC signature
-        expected_sig = hmac.new(
-            REWARD_SECRET_KEY.encode(),
-            f"{token_uid}:{token_time}".encode(),
-            hashlib.sha256
-        ).hexdigest()[:16]
-
-        if not hmac.compare_digest(expected_sig, token_sig):
-            return False, "Invalid signature."
-
-        # Unified single transaction: Store token & Add credits atomically
-        with sqlite3.connect('users.db', timeout=15) as conn:
-            c = conn.cursor()
-            c.execute("INSERT INTO used_rewards VALUES (?, ?, ?)", (payload_token, current_user_id, current_time))
+    with sqlite3.connect('users.db', timeout=15) as conn:
+        c = conn.cursor()
+        try:
+            # Enforce single-use per token
+            c.execute("INSERT INTO used_rewards VALUES (?, ?, ?)", (clean_token, current_user_id, int(time.time())))
+            # Atomically credit 3 downloads in the same transaction
             c.execute('''INSERT INTO user_credits (user_id, credits) VALUES (?, ?)
                          ON CONFLICT(user_id) DO UPDATE SET credits = credits + ?''',
                       (current_user_id, 3, 3))
             conn.commit()
-
-        return True, "Success"
-
-    except ValueError:
-        return False, "Malformed reward token."
-    except sqlite3.IntegrityError:
-        return False, "This reward token has already been claimed."
-    except Exception as e:
-        return False, f"Verification error: {e}"
+            return True, "Success"
+        except sqlite3.IntegrityError:
+            return False, "This reward has already been claimed."
+        except Exception as e:
+            return False, f"Database error: {e}"
 
 init_db()
 
@@ -357,6 +317,7 @@ def send_welcome(message):
     user_id = message.from_user.id
     text = message.text.strip()
     
+    # Handle Monetag Ad Reward Link directly
     if "reward_" in text:
         parts = text.split("reward_")
         if len(parts) > 1:
@@ -373,7 +334,7 @@ def send_welcome(message):
                 )
                 return
             else:
-                bot.reply_to(message, f"⚠️ **Reward Claim Failed:** {reason}")
+                bot.reply_to(message, f"⚠️ **Reward Claim Notice:** {reason}")
                 return
 
     credits = get_credits(user_id)
