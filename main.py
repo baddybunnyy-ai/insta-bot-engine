@@ -8,7 +8,7 @@ import yt_dlp
 from flask import Flask
 from threading import Thread
 
-# Static FFmpeg Setup
+# Static FFmpeg binary initialization
 try:
     import imageio_ffmpeg
     FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
@@ -35,7 +35,6 @@ def get_credits(user_id):
     c.execute("SELECT credits FROM user_credits WHERE user_id = ?", (user_id,))
     row = c.fetchone()
     if row is None:
-        # First-time user gets 2 Free Downloads
         c.execute("INSERT INTO user_credits VALUES (?, ?)", (user_id, 2))
         conn.commit()
         credits = 2
@@ -61,11 +60,11 @@ def add_credits(user_id, amount=3):
 
 init_db()
 
-# Keep-alive Web Server for Render
+# Keep-alive Web Server for Render Hosting
 app = Flask('')
 @app.route('/')
 def home():
-    return "Bot Engine 24/7 Active!"
+    return "Bot is running 24/7!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -74,7 +73,7 @@ def keep_alive():
     t = Thread(target=run_flask)
     t.start()
 
-# /start command & Monetag Deep-link Reward Listener
+# /start command & Ad Reward Listener
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -96,7 +95,7 @@ def send_welcome(message):
     welcome_text = (
         "🚀 **All-in-One Video Downloader Bot**\n\n"
         "Send me any link from supported platforms:\n"
-        "• **Instagram** (Reels, Posts, Stories)\n"
+        "• **Instagram** (Reels, Posts, Videos)\n"
         "• **YouTube** (Shorts & Videos)\n"
         "• **Pinterest** (Videos & Media)\n"
         "• **Twitter / X** (Videos & GIFs)\n"
@@ -106,12 +105,11 @@ def send_welcome(message):
     )
     bot.reply_to(message, welcome_text, parse_mode="Markdown")
 
-# Universal Downloader Engine with Multi-Client Bypass
+# Universal Multi-Platform Downloader Handler
 def download_and_send(chat_id, user_id, url, remaining_credits):
-    msg = bot.send_message(chat_id, "⚡ *Processing & downloading HD video, please wait...*", parse_mode="Markdown")
+    msg = bot.send_message(chat_id, "⚡ *Downloading your video in HD, please wait...*", parse_mode="Markdown")
     file_prefix = f"dl_{user_id}_{int(time.time())}"
     
-    # Robust yt-dlp Configuration
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best',
         'outtmpl': f'{file_prefix}.%(ext)s',
@@ -119,11 +117,11 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
         'no_warnings': True,
         'noplaylist': True,
         'nocheckcertificate': True,
-        'max_filesize': 25 * 1024 * 1024,  # 25 MB Limit
+        'max_filesize': 25 * 1024 * 1024,
+        # Strict iOS API emulation to bypass YouTube 'Sign in' bot-block
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'tv_embedded', 'web_creator', 'ios'],
-                'player_skip': ['webpage', 'configs']
+                'player_client': ['ios']
             },
             'twitter': {
                 'api': 'syndication'
@@ -140,7 +138,6 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Search for the output video file
         downloaded_files = glob.glob(f"{file_prefix}*")
         valid_files = [f for f in downloaded_files if not f.endswith('.part') and not f.endswith('.ytdl')]
         
@@ -163,7 +160,7 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
             
     except Exception as e:
         print(f"Download Error for URL {url}: {e}")
-        add_credits(user_id, 1)  # Refund credit if download fails
+        add_credits(user_id, 1)  # Refund credit on failure
         for f in glob.glob(f"{file_prefix}*"):
             try:
                 os.remove(f)
@@ -177,9 +174,9 @@ def download_and_send(chat_id, user_id, url, remaining_credits):
             chat_id, 
             "❌ **Download Failed.** (Credit Refunded)\n\n"
             "Possible reasons:\n"
-            "1. Private account or age-restricted video.\n"
+            "1. Private account or restricted link.\n"
             "2. Video file size exceeds 25MB.\n"
-            "3. Platform blocked server IP."
+            "3. Platform temporarily blocked stream."
         )
 
 # Handle incoming links
