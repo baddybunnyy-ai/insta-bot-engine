@@ -33,7 +33,7 @@ bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=10)
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Concurrency Controls (Render 512MB RAM Safety)
+# Concurrency Controls (Render 512MB RAM Guard)
 DOWNLOAD_SEMAPHORE = threading.BoundedSemaphore(3)
 active_users = {}  # {user_id: timestamp}
 active_users_lock = threading.Lock()
@@ -45,9 +45,10 @@ def init_db():
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS user_credits 
                      (user_id INTEGER PRIMARY KEY, credits INTEGER)''')
-        c.execute('''CREATE TABLE IF NOT EXISTS used_rewards 
-                     (reward_token TEXT PRIMARY KEY, user_id INTEGER, timestamp INTEGER)''')
-        c.execute('''CREATE INDEX IF NOT EXISTS idx_user_rewards ON used_rewards(user_id, timestamp)''')
+        # Uses reward_claims with auto-increment so repetitive static tokens don't fail
+        c.execute('''CREATE TABLE IF NOT EXISTS reward_claims 
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, timestamp INTEGER)''')
+        c.execute('''CREATE INDEX IF NOT EXISTS idx_user_claims ON reward_claims(user_id, timestamp)''')
         conn.commit()
 
 def get_credits(user_id):
@@ -78,32 +79,33 @@ def atomic_add_credits(user_id, amount=3):
         conn.commit()
 
 def verify_and_claim_reward_atomic(payload_token, current_user_id):
+    """
+    Prevents token lockouts. Uses a 15-second ad cooldown per user.
+    Guarantees credits are awarded every time a new ad is watched.
+    """
     clean_token = payload_token.strip()
-    if not re.match(r'^[a-zA-Z0-9_\-]{5,64}$', clean_token):
-        return False, "Invalid token format."
+    if not clean_token or len(clean_token) < 2:
+        return False, "Invalid reward request."
 
     now = int(time.time())
+    COOLDOWN_SECONDS = 15  # Minimum time required between ad claims
+
     with sqlite3.connect('users.db', timeout=20) as conn:
         c = conn.cursor()
-        c.execute("SELECT user_id FROM used_rewards WHERE reward_token = ?", (clean_token,))
-        if c.fetchone() is not None:
-            return False, "This reward token has already been claimed."
-
-        c.execute("SELECT MAX(timestamp) FROM used_rewards WHERE user_id = ?", (current_user_id,))
+        c.execute("SELECT MAX(timestamp) FROM reward_claims WHERE user_id = ?", (current_user_id,))
         row = c.fetchone()
-        if row and row[0] and (now - row[0]) < 15:
-            return False, f"Please wait {15 - (now - row[0])}s before claiming again."
+        last_claim = row[0] if (row and row[0]) else 0
 
-        try:
-            c.execute("INSERT INTO used_rewards (reward_token, user_id, timestamp) VALUES (?, ?, ?)",
-                      (clean_token, current_user_id, now))
-            c.execute('''INSERT INTO user_credits (user_id, credits) VALUES (?, ?)
-                         ON CONFLICT(user_id) DO UPDATE SET credits = credits + ?''',
-                      (current_user_id, 3, 3))
-            conn.commit()
-            return True, "Success"
-        except sqlite3.IntegrityError:
-            return False, "This reward token has already been claimed."
+        if (now - last_claim) < COOLDOWN_SECONDS:
+            wait_time = COOLDOWN_SECONDS - (now - last_claim)
+            return False, f"Please wait {wait_time}s before claiming again."
+
+        c.execute("INSERT INTO reward_claims (user_id, timestamp) VALUES (?, ?)", (current_user_id, now))
+        c.execute('''INSERT INTO user_credits (user_id, credits) VALUES (?, ?)
+                     ON CONFLICT(user_id) DO UPDATE SET credits = credits + ?''',
+                  (current_user_id, 3, 3))
+        conn.commit()
+        return True, "Success"
 
 init_db()
 
@@ -266,7 +268,7 @@ def download_and_send(chat_id, user_id, raw_url):
     try:
         status_msg = bot.send_message(chat_id, "⚡ *Processing & downloading HD video...*", parse_mode="Markdown")
         
-        # 1. Download Phase (Guarded by Semaphore)
+        # 1. Download Phase
         with DOWNLOAD_SEMAPHORE:
             success = False
             is_yt = is_youtube_url(raw_url)
@@ -312,7 +314,7 @@ def download_and_send(chat_id, user_id, raw_url):
                 except Exception as e:
                     logging.warning(f"yt-dlp error on {raw_url} | Reason: {e}")
 
-        # 2. Upload Phase (Outside Semaphore)
+        # 2. Upload Phase
         if success and os.path.exists(final_file):
             safe_edit_message(chat_id, status_msg.message_id, "📤 *Uploading video to Telegram...*")
             try:
