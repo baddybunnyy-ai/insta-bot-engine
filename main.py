@@ -19,7 +19,7 @@ try:
 except Exception:
     FFMPEG_PATH = None
 
-# Configurations (Direct fallback for immediate copy-paste)
+# Configurations
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8991187008:AAEmpfwuA3JUKLAuWYFjkgsnyHhbEcZFY4E")
 WEB_APP_URL = "https://insta-reel-ad.vercel.app"
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB Limit
@@ -289,13 +289,15 @@ def send_welcome(message):
     user_id = message.from_user.id
     text = message.text.strip()
     
+    # Handle reward token claim
     if "reward_" in text:
         parts = text.split("reward_")
         if len(parts) > 1:
             token = parts[1].strip()
             verified, reason = verify_and_claim_reward_atomic(token, user_id)
+            total_credits = get_credits(user_id)
+            
             if verified:
-                total_credits = get_credits(user_id)
                 bot.reply_to(
                     message,
                     f"🎉 **+3 Download Credits Added!**\n\n"
@@ -305,7 +307,19 @@ def send_welcome(message):
                 )
                 return
             else:
-                bot.reply_to(message, f"⚠️ **Reward Claim Notice:** {reason}")
+                # Provide an interactive button instead of a dead-end error
+                markup = types.InlineKeyboardMarkup()
+                cache_bypass_url = f"{WEB_APP_URL}/?uid={user_id}&v={int(time.time())}"
+                markup.add(types.InlineKeyboardButton(text="⚡ Watch Ad (+3 Downloads)", web_app=types.WebAppInfo(url=cache_bypass_url)))
+                
+                bot.reply_to(
+                    message,
+                    f"⚠️ **Reward Notice:** {reason}\n\n"
+                    f"⚡ Available Balance: **{total_credits} Downloads**\n\n"
+                    f"Naye downloads add karne ke liye niche button par tap karke ad dekhein:",
+                    reply_markup=markup,
+                    parse_mode="Markdown"
+                )
                 return
 
     credits = get_credits(user_id)
